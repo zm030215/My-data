@@ -1,0 +1,340 @@
+#loading data from MySQL
+import pymysql
+pymysql.install_as_MySQLdb()    
+import MySQLdb
+
+conn = MySQLdb.Connection(
+        host = 'localhost',
+        user = '?', #your user name for mysql database
+        password = '?',#your password
+        port = 3306,
+        database = 'Test', #name of the database
+        charset='gbk')
+
+cursor = conn.cursor()
+sql = 'select post_id,post_time,ccount,lcount,caption,update_time from your table;'
+
+cursor.execute(sql)
+data = cursor.fetchall()
+
+#turn off the connection with the database
+cursor.close()
+conn.close()
+
+#loading seleted data into a dataframe
+import pandas as pd
+data = list(data)
+data_sample = pd.DataFrame(data, columns = ['post_id','post_time','no_of_comments','no_of_like','caption','updated'])
+data_sample.count()
+
+#Data cleaning
+#Step 1: comparing with 5 data collection hashtags
+import re
+list_cap_hg=[]
+for i in range(len(data_sample)):
+    list_cap_hg.append(re.findall(r"#(\w+)", data_sample.caption[i].lower()))
+data_collection_hg=['book','library','read','reading','bookstagram']
+TF=[]
+for i in range(len(data_sample)):
+    if list(set(list_cap_hg[i]).intersection(set(data_collection_hg)))==[]:
+        TF.append('F')
+    else:
+        TF.append('T')
+hg_judge=pd.DataFrame(TF, columns = ['hg_judge'])
+data_plus_2=pd.concat([data_sample,hg_judge],join='outer',axis=1)
+T_data=data_plus_2[data_plus_2['hg judge']=='T']
+del T_data['hg judge']
+data_for_lan=T_data.reset_index()
+
+#step 2: language checking
+L=[]
+for i in range(len(data_for_lan)):
+    a=guess_language(data_for_lan['caption'][i])
+    L.append(a)
+lan=pd.DataFrame(L, columns = ['lan'])
+data_plus_3=pd.concat([data_for_lan,lan],join='outer',axis=1)
+clean_data=data_plus_3[data_plus_3['lan']=='en']
+del clean_data['index']
+del clean_data['lan']
+new_index_clean_data=clean_data.reset_index()
+del new_index_clean_data['index']
+
+#deleting duplicated captions
+new_index_clean_data=new_index_clean_data['caption'].drop_duplicates()
+new_index_clean_data=new_index_clean_data.reset_index()
+del new_index_clean_data['index']
+
+#Calculating hashtag locations
+#deleting special signals in the caption
+puncList = [ "{","}",".","........","[","]","??","???","????","?????","-","+","=","_","..",";",":","!","?","/","\\",",","...","......","$","&",")","(","\""]
+words=[]
+wc=[]
+for i in range(len(new_index_clean_data)):
+    c=[x for x in new_index_clean_data['caption'][i].split() if x not in puncList]
+    words.append(c)
+    wc.append(len(c))
+word_count=pd.DataFrame(wc, columns = ['wc'])
+hashtags=[]
+hc=[]
+for i in range(len(new_index_clean_data)):
+    c=new_index_clean_data['hg'][i].split(',')
+    hashtags.append(c)
+    hc.append(len(c))
+hg_count=pd.DataFrame(hc, columns = ['hc'])
+data_plus_4=pd.concat([new_index_clean_data,word_count,hg_count],join='outer',axis=1)
+hginx=[]
+for i in range(len(data_plus_4)):
+    c=[x for x in range(len(words[i])) if words[i][x][0]=='#']
+    hginx.append(c)
+b=[]
+for i in range(len(data_plus_4)):
+    h=[(a+1)/data_plus_4['wc'][i] for a in hginx[i]]
+    b.append(h)
+import statistics
+std=[]
+for i in range(len(data_plus_4)):
+    if len(b[i])==1:
+        std.append(1)
+    else:
+        std.append(statistics.stdev(b[i]))
+mean=[]
+medi=[]
+for i in range(len(data_plus_4)):
+    s=[a+1 for a in hginx[i]]
+    mean.append(statistics.mean(s))
+    medi.append(statistics.median(s))
+per=[]
+for i in range(len(data_plus_4)):
+    p=data_plus_4['hc'][i]/data_plus_4['wc'][i]
+    per.append(p)
+L=[]
+time0=time.time()
+for i in range(len(data_plus_4)):
+    if per[i]>=0.95:
+        L.append('All hashtags')
+    else:
+        if 0.80<=per[i]<=0.95:
+            L.append('Most of hashtags')
+        else:
+            if hc[i]==1:
+                if medi[i]>(2*data_plus_4['wc'][i]/3):
+                    L.append('Only in the end')
+                elif medi[i]<(data_plus_4['wc'][i]/3):
+                    L.append('Only in the front')
+                else:
+                    L.append('Only in the middle')
+            else:
+                if max(hginx[i])-min(hginx[i])+1==data_plus_4['hc'][i]:
+                    if hginx[i][0]==0:
+                        L.append('All in the beginning')
+                    elif data_plus_4['wc'][i]-max(hginx[i])<4:
+                        L.append('All in the end')
+                    else:
+                        L.append('All in the middle')
+                    
+                else:
+                    if hginx[i][0]==0:
+                        if data_plus_4['wc'][i]-1-max(hginx[i])<4:
+                            if medi[i]>(2*data_plus_4['wc'][i]/3):
+                                L.append('Begun and centralized in the end')
+                            else:
+                                L.append('Scattered')
+                        else:
+                            if std[i]<0.3:
+                                L.append('Begun and centralized in the front')
+                            else:
+                                L.append('Scattered but not in the end')
+                    else:
+                        if medi[i]>(2*data_plus_4['wc'][i]/3):
+                            L.append('More in the end')
+                        else:
+                            if std[i]<0.3:
+                                L.append('Less in the front')
+                            else:
+                                L.append('Scattered but not in the front  ')       
+New=pd.DataFrame(L, columns = ['location'])
+hg_per=pd.DataFrame(per,columns = ['hg_per'])
+Std=pd.DataFrame(std, columns = ['hg_std'])
+Mean=pd.DataFrame(mean, columns = ['hg_mean'])
+Median=pd.DataFrame(medi, columns = ['hg_median'])
+from dateutil.parser import parse
+h=[]
+for i in range(len(data_plus_4)):
+    a=(parse(data_plus_4['updated_time'][i])-parse(data_plus_4['post_time'][i])).total_hours()
+    h.append(a)
+hour=pd.DataFrame(h, columns = ['time_difference'])
+F=pd.concat([data_plus_4,hg_per,Std,Mean,Median,New,hour],join='outer',axis=1)
+
+
+#statistical description
+F.describe()
+#Pie chart of number of comments
+import matplotlib.pyplot as plt 
+fig = plt.figure(1, figsize=(10,10),dpi=200) 
+plt.pie(
+    (1269624,458374,302124,143130,104613,60304,131911,57564,23648,10050),
+    labels=('0','1','2','3','4','5','[6,10]','[11,20]','[21,40]','>40'),
+    explode=(0,0,0,0,0,0,0,0.2,0.3,0.45),# space between slices
+    startangle=90,    # rotate conter-clockwise by 90 degrees
+    autopct='%1.2f%%',# display fraction as percentage
+    )
+plt.legend(fancybox=True)
+plt.axis('equal')   # plot pyplot as circle
+plt.tight_layout()
+plt.show()
+
+
+#Pie chart of captions per hashtag location
+fig = plt.figure(1, figsize=(10,10),dpi=200) 
+plt.pie(
+    (1570430,325861,282092,203953,63285,39362,19288,19018,11904,11271,7985,3816,1407,1086,684),
+    labels=('AE','ME','MH','AH','BCE','LF','S',
+           'AM','OE','S not F','AB','BCF','OF','OM','S not E'),
+    explode=(0.02,0,0,0,0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,1.0,1.1), # space between slices
+    startangle=90,    # rotate conter-clockwise by 90 degrees
+    autopct='%1.2f%%',# display fraction as percentage
+    )
+plt.legend(fancybox=True)
+plt.axis('equal')   # plot pyplot as circle
+plt.tight_layout()
+plt.show()
+
+#Calculating hashtags
+H=[]
+for hg in hashtags:
+     H.append(hg.split(' '))
+hashtag=sum(H, [])
+from collections import Counter
+Counter(hashtag).most_common(10)
+
+#Creating three data samples
+F1=F[F['hc']==1]
+F2=F[(F['hc']>1)&(F['hg_per']>=0.8)]
+F3=F[(F['hc']>1)&(F['hg_per']<0.8)]
+
+#Regression models on captions with only one hashtag
+#HG=1
+#identifying outliers
+print(F1['no_of_like'].quantile(0.98))
+print(F1['no_of_comments'].quantile(0.98))
+print(F1['hour'].quantile(0.98))
+C=F1[F1['no_of_comments']<13]
+L=C[C['no_of_like']<306]
+H=L[L['hour']<306]
+F1=H.reset_index()
+plt.figure(1, figsize=(10,10), dpi=80)
+
+plt.subplot(1,2,1)
+c_f1 = F1['no_of_comments']
+pillar = 15
+a = plt.hist(c_f1, bins=pillar, normed=True, range=[0, pillar], color='g', alpha=0.5)
+plt.plot(a[1][0:pillar], a[0], 'r')
+plt.title('Distribution of the number of comments')
+plt.grid()
+
+plt.subplot(1,2,2)
+l_f1 = F1['no_of_like']
+pillar = 100
+a = plt.hist(l_f1, bins=pillar, normed=True, range=[0, pillar], color='g', alpha=0.5)
+plt.plot(a[1][0:pillar], a[0], 'r')
+plt.title('Distribution of the number of likes')
+plt.grid()
+plt.show()
+from statsmodels.genmod.generalized_estimating_equations import GEE
+from statsmodels.genmod.cov_struct import (Exchangeable,
+    Independence,Autoregressive)
+from statsmodels.genmod.families import Poisson
+fam = Poisson()
+ind = Independence() 
+model1 = GEE.from_formula("no_of_comments ~ wc+location+hour+no_of_like", 'hg_com',F1, cov_struct=ind, family=fam)
+result1 = model1.fit()
+print(result1.summary())
+result2 = sm.ols(formula="no_of_like ~ location+hour+wc+no_of_comments", data=F1).fit()
+print (result2.summary())
+
+#HG_per > =80%
+print(F2['no_of_like'].quantile(0.98))
+print(F2['no_of_comments'].quantile(0.98))
+print(F2['hour'].quantile(0.98))
+C=F2[F2['no_of_comments']<10]
+L=C[C['no_of_like']<287]
+H=L[L['hour']<310]
+F2=H.reset_index()
+plt.figure(1, figsize=(10,10), dpi=80)
+
+plt.subplot(1,2,1)
+c_f2 = F2['no_of_comments']
+pillar = 10
+a = plt.hist(c_f1, bins=pillar, normed=True, range=[0, pillar], color='g', alpha=0.5)
+plt.plot(a[1][0:pillar], a[0], 'r')
+plt.title('Distribution of the number of comments')
+plt.grid()
+
+plt.subplot(1,2,2)
+l_f2 = F2['no_of_like']
+pillar = 100
+a = plt.hist(l_f1, bins=pillar, normed=True, range=[0, pillar], color='g', alpha=0.5)
+plt.plot(a[1][0:pillar], a[0], 'r')
+plt.title('Distribution of the number of likes')
+plt.grid()
+plt.show()
+fam = Poisson()
+ind = Independence() 
+model3 = GEE.from_formula("no_of_comments ~ location+hour+no_of_like", 'hg_com',F2, cov_struct=ind, family=fam)
+result3 = model3.fit()
+print(result3.summary())
+result4 = sm.ols(formula="no_of_like ~ location+hour+no_of_comments", data=F2).fit()
+print (result4.summary())
+
+#HG_per < 80%
+print(F3['no_of_like'].quantile(0.98))
+print(F3['no_of_comments'].quantile(0.98))
+print(F3['hour'].quantile(0.98))
+C=F3[F3['no_of_comments']<10]
+L=C[C['no_of_like']<287]
+H=L[L['hour']<310]
+F3=H.reset_index()
+plt.figure(1, figsize=(10,10), dpi=80)
+
+plt.subplot(1,2,1)
+c_f3 = F3['no_of_comments']
+pillar = 10
+a = plt.hist(c_f1, bins=pillar, normed=True, range=[0, pillar], color='g', alpha=0.5)
+plt.plot(a[1][0:pillar], a[0], 'r')
+plt.title('Distribution of the number of comments')
+plt.grid()
+
+plt.subplot(1,2,2)
+l_f3 = F3['no_of_like']
+pillar = 400
+a = plt.hist(l_f1, bins=pillar, normed=True, range=[0, pillar], color='g', alpha=0.5)
+plt.plot(a[1][0:pillar], a[0], 'r')
+plt.title('Distribution of the number of likes')
+plt.grid()
+plt.show()
+model5 = GEE.from_formula("no_of_comments ~ location+hour+wc+hc+no_of_like", 'hg_com',F3, cov_struct=ind, family=fam)
+result5 = model5.fit()
+print(result5.summary())
+result6 = sm.ols(formula="no_of_like ~ hour+location+hc+wc+no_of_comments", data=F3).fit()
+print (result6.summary())
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
